@@ -27,7 +27,7 @@ def walk_directory(directory):
 
 
 @stub.local_entrypoint()
-def main(prompt, directory=generatedDir, model="gpt-3.5-turbo"):
+def main(prompt, directory=generatedDir, model="gpt-4"):
   code_contents = walk_directory(directory)
 
   # Now, `code_contents` is a dictionary that contains the content of all your non-image files
@@ -53,7 +53,7 @@ def main(prompt, directory=generatedDir, model="gpt-3.5-turbo"):
     concurrency_limit=5,
     timeout=120,
 )
-def generate_response(system_prompt, user_prompt, model="gpt-3.5-turbo", *args):
+def generate_response(system_prompt, user_prompt, model="gpt-4", *args):
     import openai
 
     # Set up your OpenAI API credentials
@@ -72,7 +72,7 @@ def generate_response(system_prompt, user_prompt, model="gpt-3.5-turbo", *args):
         'model': model,
         # "model": "gpt-4",
         "messages": messages,
-        "max_tokens": 1500,
+        "max_tokens": 500, #original 1500, but changed to fit in context window
         "temperature": 0,
     }
 
