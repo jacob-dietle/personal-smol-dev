@@ -1,131 +1,186 @@
-a Chrome Manifest V3 extension that reads the current page, and offers a popup UI that has the page title+content and a textarea for a prompt (with a default value we specify). When the user hits submit, it sends the page title+content to the Anthropic Claude API along with the up to date prompt to summarize it. The user can modify that prompt and re-send the prompt+content to get another summary view of the content.
+# A FASTAPI based python API that uses an OpenAI GPT-4 powered Langchain Custom LLM Agent with Chatmodel and the Langchain Gmail Toolkit to interact with the Gmail API authenticating using Google Ouath2. The agent should use agent.chat(). The agent will use the Gmail Toolkit based on natural language instructions - The API sends and receives natural language tasks request from the client application layer (ChatGPT Plugin or other LLM Frontend). The API will use a simple SQLite database to store tasks and chat history.
 
-- Only when clicked:
-  - it injects a content script `content_script.js` on the currently open tab, and accesses the title `pageTitle` and main content (innerText) `pageContent` of the currently open page 
-  (extracted via an injected content script, and sent over using a `storePageContent` action) 
-  - in the background, receives the `storePageContent` data and stores it
-  - only once the new page content is stored, then it pops up a full height window with a minimalistic styled html popup
-  - in the popup script
-    - the popup should display a 10px tall rounded css animated red and white candy stripe loading indicator `loadingIndicator`, while waiting for the anthropic api to return
-      - with the currently fetching page title and a running timer in the center showing time elapsed since call started
-      - do not show it until the api call begins, and hide it when it ends.
-    - retrieves the page content data using a `getPageContent` action (and the background listens for the `getPageContent` action and retrieves that data) and displays the title at the top of the popup
-    - check extension storage for an `apiKey`, and if it isn't stored, asks for an API key to Anthropic Claude and stores it.
-    - at the bottom of the popup, show a vertically resizable form that has:
-      - a 2 line textarea with an id and label of `userPrompt`
-        - `userPrompt` has a default value of
-            ```js
-            defaultPrompt = `Please provide a detailed, easy to read HTML summary of the given content`;
-            ```js
-      - a 4 line textarea with an id and label of `stylePrompt`
-        - `stylePrompt` has a default value of
-            ```js
-            defaultStyle = `Respond with 3-4 highlights per section with important keywords, people, numbers, and facts bolded in this HTML format:
-            
-            <h1>{title here}</h1>
-            <h3>{section title here}</h3>
-            <details>
-              <summary>{summary of the section with <strong>important keywords, people, numbers, and facts bolded</strong> and key quotes repeated}</summary>
-              <ul>
-                <li><strong>{first point}</strong>: {short explanation with <strong>important keywords, people, numbers, and facts bolded</strong>}</li>
-                <li><strong>{second point}</strong>: {same as above}</li>
-                <li><strong>{third point}</strong>: {same as above}</li>
-                <!-- a fourth point if warranted -->
-              </ul>
-            </details>
-            <h3>{second section here}</h3>
-            <p>{summary of the section with <strong>important keywords, people, numbers, and facts bolded</strong> and key quotes repeated}</p>
-            <details>
-              <summary>{summary of the section with <strong>important keywords, people, numbers, and facts bolded</strong> and key quotes repeated}</summary>
-              <ul>
-                <!-- as many points as warranted in the same format as above -->
-              </ul>
-            </details>
-            <h3>{third section here}</h3>
-            <!-- and so on, as many sections and details/summary subpoints as warranted -->
-
-            With all the words in brackets replaced by the summary of the content. sanitize non visual HTML tags with HTML entities, so <template> becomes &lt;template&gt; but <strong> stays the same. Only draw from the source content, do not hallucinate. Finally, end with other questions that the user might want answered based on this source content:
-
-            <hr>
-            <h2>Next prompts</h2>
-            <ul>
-              <li>{question 1}</li>
-              <li>{question 2}</li>
-              <li>{question 3}</li>
-            </ul>`;
-            ```js
-      - and in the last row, on either side,
-        - and a nicely styled submit button with an id of `sendButton` (tactile styling that "depresses" on click)
-      - only when `sendButton` is clicked, calls the Anthropic model endpoint https://api.anthropic.com/v1/complete with: 
-        - append the page title
-        - append the page content
-        - add the prompt which is a concatenation of
-            ```js
-            finalPrompt = `Human: ${userPrompt} \n\n ${stylePrompt} \n\n Assistant:`
-            ```
-        - and use the `claude-instant-v1` model (if `pageContent` is <70k words) or the `claude-instant-v1-100k` model (if more) 
-        - requesting max tokens = the higher of (25% of the length of the page content, or 750 words)
-        - if another submit event is hit while the previous api call is still inflight, cancel that and start the new one
-    - renders the Anthropic-generated result at the top of the popup in a div with an id of `content`
-
-Important Details:
-
-- It has to run in a browser environment, so no Nodejs APIs allowed.
-
-- the return signature of the anthropic api is curl https://api.anthropic.com/v1/complete\
-  -H "x-api-key: $API_KEY"\
-  -H 'content-type: application/json'\
-  -d '{
-    "prompt": "\n\nHuman: Tell me a haiku about trees\n\nAssistant: ",
-    "model": "claude-v1", "max_tokens_to_sample": 1000, "stop_sequences": ["\n\nHuman:"]
-  }'
-{"completion":" Here is a haiku about trees:\n\nSilent sentinels, \nStanding solemn in the woods,\nBranches reaching sky.","stop":"\n\nHuman:","stop_reason":"stop_sequence","truncated":false,"log_id":"f5d95cf326a4ac39ee36a35f434a59d5","model":"claude-v1","exception":null}
-
-- in the string prompt sent to Anthropic, first include the page title and page content, and finally append the prompt, clearly vertically separated by spacing.
-
-- if the Anthropic api call is a 401, handle that by clearing the stored anthropic api key and asking for it again.
-
-- add styles to make sure the popup's styling follows the basic rules of web design, for example having margins around the body, and a system font stack.
-
-- style the popup body with <link rel="stylesheet" href="https://unpkg.com/mvp.css@1.12/mvp.css"> but insist on body margins of 16 and a minimum width of 400 and height of 600.
-
-## debugging notes
-
-inside of background.js, just take the getPageContent response directly
-
-```js
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  if (request.action === 'storePageContent') {
-    // dont access request.pageContent
-    chrome.storage.local.set({ pageContent: request }, () => {
-      sendResponse({ success: true });
-    });
-  } else if (request.action === 'getPageContent') {
-    chrome.storage.local.get(['pageContent'], (result) => {
-      // dont access request.pageContent
-      sendResponse(result);
-    });
-  }
-  return true;
-});
+## The high level system design is as follows in this mermaid.js diagram:
+```graph LR
+  subgraph SatoriIntelligentInboxAPIv1
+  AGT["Agent Gmail Toolkit"]
+  LCLA["Langchain Custom ChatMode LLM Agent"]
+  TD["Task Database"]
+  end
+  GA["Gmail API"]<-->|"Programmatic API Calls"|AGT
+  AGT-->|"Natural Language Tools"|LCLA
+  LCLA<-->|"Natural Language API Calls"|CGP["ChatGPT Plugins or other Frontend LLM"]
+  LCLA<-->|"Chat & Task Memory"|TD
 ```
 
-inside of popup.js, Update the function calls to `requestAnthropicSummary`
-in `popup.js` to pass the `apiKey`:
 
-```javascript
-chrome.storage.local.get(['apiKey'], (result) => {
-  const apiKey = result.apiKey;
-  requestAnthropicSummary(defaultPrompt, apiKey);
-});
+## The API should have these endpoints:
+ • POST `/api/v1/request`: Receive a natural language request from the client application, returns a requestId.
+ • GET `/api/v1/request/{requestId}`: Get the status and result of a specific request.
 
-sendButton.addEventListener('click', () => {
-  chrome.storage.local.get(['apiKey'], (result) => {
-    const apiKey = result.apiKey;
-    requestAnthropicSummary(userPrompt.value, apiKey);
-  });
-});
+
+## How to use Langchain Custom Agents & the Gmail Toolkit:
+
+LangChain is a framework for developing applications powered by language models, enabling data-aware and agentic applications. Agents in LangChain are responsible for handling user inputs and interacting with the environment using tools. The Gmail toolkit is a set of tools that allows the agent to interact with the Gmail API and perform various email-related tasks.
+
+Step 1: Install necessary libraries
+```python
+!pip install langchain
+!pip install google-search-results
+!pip install openai
+!pip install google-api-python-client
+!pip install google-auth-oauthlib
+!pip install google-auth-httplib2
+!pip install beautifulsoup4
 ```
 
-in `popup.js`, store the defaultPrompt at the top level.
-also, give a HTML format to the anthropic prompt
+Step 2: Import required modules
+```python
+from langchain.memory import ChatMessageHistory, ConversationBufferMemory
+from langchain.llms import OpenAI
+from langchain.chains import ConversationChain
+from langchain.agents import Tool, AgentExecutor, LLMSingleActionAgent, AgentOutputParser
+from langchain.prompts import BaseChatPromptTemplate
+from langchain import SerpAPIWrapper, LLMChain
+from langchain.chat_models import ChatOpenAI
+from langchain.schema import AgentAction, AgentFinish, HumanMessage
+from langchain.agents.agent_toolkits import GmailToolkit
+from langchain.tools.gmail.utils import build_resource_service, get_gmail_credentials
+import re
+from getpass import getpass
+```
+
+Step 3: Set up Gmail API credentials
+Follow the Gmail API documentation to set up your credentials and download the `credentials.json` file.
+
+Step 4: Create the GmailToolkit
+```python
+toolkit = GmailToolkit()
+```
+
+Step 5: Set up the PromptTemplate
+Create a custom prompt template that incorporates the Gmail toolkit and chat history. Make sure to include placeholders for chat history and user input in the template.
+
+```python
+template = """Your custom template here with placeholders for chat history and user input"""
+
+class CustomPromptTemplate(BaseChatPromptTemplate):
+    # Your custom implementation of format_messages method
+```
+
+Step 6: Set up the OutputParser
+Create a custom output parser that can parse the LLM output into AgentAction and AgentFinish. Define a class that inherits from AgentOutputParser and implement the `parse` method.
+
+```python
+class CustomOutputParser(AgentOutputParser):
+    def parse(self, llm_output: str) -> Union[AgentAction, AgentFinish]:
+        # Your custom implementation of the parse method
+```
+
+Step 7: Set up the LLM
+```python
+OPENAI_API_KEY = getpass()
+llm = ChatOpenAI(openai_api_key=OPENAI_API_KEY, temperature=0)
+```
+
+Step 8: Set up the Agent
+Combine the LLM, prompt template, output parser, and Gmail toolkit to set up the custom agent. Create an instance of LLMChain with the LLM and custom prompt template. Then, create an instance of LLMSingleActionAgent with the LLMChain, custom output parser, and Gmail toolkit.
+
+```python
+llm_chain = LLMChain(llm=llm, prompt=CustomPromptTemplate())
+agent = LLMSingleActionAgent(
+    llm_chain=llm_chain, 
+    output_parser=CustomOutputParser(),
+    stop=["\nObservation:"], 
+    allowed_tools=toolkit.get_tools()
+)
+```
+
+Step 9: Use the Agent
+Create an AgentExecutor and use it to run the custom agent with user inputs. Use the `agent.chat()` method to maintain a continuous chat functionality.
+
+```python
+agent_executor = AgentExecutor.from_agent_and_tools(agent=agent, tools=toolkit.get_tools(), verbose=True)
+
+while True:
+    user_input = input("User: ")
+    if user_input.lower() == "quit":
+        break
+    response = agent_executor.chat(user_input)
+    print(f"Agent: {response}")
+```
+
+An Example of How to use the Gmail Toolkit: 
+
+```
+agent.run("Create a gmail draft for me to edit of a letter from the perspective of a sentient parrot"
+          " who is looking to collaborate on some research with her"
+          " estranged friend, a cat. Under no circumstances may you send the message, however.")
+``` 
+
+## How to use Gmail API & Google Oauth in Python:
+
+
+The Gmail API is a RESTful API that enables authorized access to Gmail mailboxes and facilitates sending mail.
+
+The API provides various resources and methods for handling mailbox functionality like messages, threads, attachments, labels, settings, and more.
+
+**Example Endpoints**
+
+1. `GET https://gmail.googleapis.com/gmail/v1/users/{userId}/profile`
+2. `POST https://gmail.googleapis.com/gmail/v1/users/{userId}/drafts`
+3. `GET https://gmail.googleapis.com/gmail/v1/users/{userId}/messages/{id}`
+4. `PUT https://gmail.googleapis.com/gmail/v1/users/{userId}/settings/sendAs/{sendAsEmail}`
+
+**API Resources**
+
+1. `v1.users`
+2. `v1.users.drafts`
+3. `v1.users.history`
+4. `v1.users.labels`
+5. `v1.users.messages`
+6. `v1.users.messages.attachments`
+7. `v1.users.settings` (+ multiple subresources)
+8. `v1.users.threads`
+
+We should get the Gmail ouath client_secrets from a filed called `client_secrets` in the local directory that looks like:
+```{"web":{"client_id":"614374734769-jhf599tv3ie9ifrqc3qgc8th6phdhks3.apps.googleusercontent.com","project_id":"email-agent-387222","auth_uri":"https://accounts.google.com/o/oauth2/auth","token_uri":"https://oauth2.googleapis.com/token","auth_provider_x509_cert_url":"https://www.googleapis.com/oauth2/v1/certs","client_secret":"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"}}```
+
+**The following code snippet uses the google-auth-oauthlib.flow module to construct the authorization request.***
+
+For example, this code requests read-only, offline access to a user's Google Drive:
+
+```
+import google.oauth2.credentials
+import google_auth_oauthlib.flow
+
+# Use the client_secret.json file to identify the application requesting
+# authorization. The client ID (from that file) and access scopes are required.
+flow = google_auth_oauthlib.flow.Flow.from_client_secrets_file(
+    'client_secret.json',
+    scopes=['https://www.googleapis.com/auth/drive.metadata.readonly'])
+
+# Indicate where the API server will redirect the user after the user completes
+# the authorization flow. The redirect URI is required. The value must exactly
+# match one of the authorized redirect URIs for the OAuth 2.0 client, which you
+# configured in the API Console. If this value doesn't match an authorized URI,
+# you will get a 'redirect_uri_mismatch' error.
+flow.redirect_uri = 'https://www.example.com/oauth2callback'
+
+# Generate URL for request to Google's OAuth 2.0 server.
+# Use kwargs to set optional request parameters.
+authorization_url, state = flow.authorization_url(
+    # Enable offline access so that you can refresh an access token without
+    # re-prompting the user for permission. Recommended for web server apps.
+    access_type='offline',
+    # Enable incremental authorization. Recommended as a best practice.
+    include_granted_scopes='true')
+``` 
+
+## The API should be:
+- be OpenAPI compliant
+- use the Tenacity library to handle rate limiting for both the OpenAI API and the Gmail API.
+- Have a file called "prompt.md" that acts as the prompt for the Custom LLM Agent where we can provide it instruction. 
+- Have a env. file to put our OpenAI API key, "marked insert here" 
+- accessible via CLI.
+- Use general best modern software engineering practices for error handling, modularity, debugging and emphasize functional programming, simplicity, straightforwardness. Written at the level of a higly experienced staff engineer. 

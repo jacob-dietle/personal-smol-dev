@@ -15,10 +15,10 @@ openai_model_max_tokens = 2000 # i wonder how to tweak this properly
     secret=modal.Secret.from_dotenv(),
     retries=modal.Retries(
         max_retries=3,
-        backoff_coefficient=2.0,
-        initial_delay=1.0,
+        backoff_coefficient=5.0,
+        initial_delay=5.0,
     ),
-    # concurrency_limit=5,
+    # concurrency_limit=2,
     # timeout=120,
 )
 def generate_response(system_prompt, user_prompt, *args):
